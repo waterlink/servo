@@ -70,7 +70,7 @@ pub struct HTMLScriptElement {
 
     #[ignore_heap_size_of = "Defined in rust-encoding"]
     /// https://html.spec.whatwg.org/multipage/#concept-script-encoding
-    block_character_encoding: DOMRefCell<EncodingRef>,
+    block_character_encoding: DOMRefCell<Option<EncodingRef>>,
 }
 
 impl HTMLScriptElement {
@@ -85,7 +85,7 @@ impl HTMLScriptElement {
             ready_to_be_parser_executed: Cell::new(false),
             parser_document: JS::from_ref(document),
             load: DOMRefCell::new(None),
-            block_character_encoding: DOMRefCell::new(UTF_8 as EncodingRef),
+            block_character_encoding: DOMRefCell::new(None),
         }
     }
 
@@ -241,7 +241,7 @@ impl HTMLScriptElement {
         // Step 13.
         if let Some(ref charset) = element.get_attribute(&ns!(), &atom!("charset")) {
             if let Some(encodingRef) = encoding_from_whatwg_label(&charset.Value()) {
-                *self.block_character_encoding.borrow_mut() = encodingRef;
+                *self.block_character_encoding.borrow_mut() = Some(encodingRef);
             }
         }
 
@@ -381,9 +381,61 @@ impl HTMLScriptElement {
             // Step 2.b.1.a.
             ScriptOrigin::External(Ok((metadata, bytes))) => {
                 // TODO(#9185): implement encoding determination.
-                (DOMString::from(UTF_8.decode(&*bytes, DecoderTrap::Replace).unwrap()),
-                 true,
-                 metadata.final_url)
+
+                // Step 1.
+                // TODO: If the resource's Content Type metadata, if any,
+                // specifies a character encoding, and the user agent supports
+                // that encoding, then let character encoding be that encoding,
+                // and jump to the bottom step in this series of steps.
+
+                let encoding_after_step1: Option<EncodingRef> = match metadata.charset {
+                    Some(encoding) => match encoding_from_whatwg_label(&encoding) {
+                        Some(enc_ref) => Some(enc_ref),
+                        None => {
+                            debug!("error loading script, unknown encoding {} found in ContentType metadata", encoding);
+                            None}
+                        },
+                    None => None
+                };
+
+                // Step 2.
+                // TODO: If the algorithm above set the script block's
+                // character encoding, then let character encoding be that
+                // encoding, and jump to the bottom step in this series of
+                // steps.
+
+                let encoding_after_step2: Option<EncodingRef> = match encoding_after_step1 {
+                    Some(enc_ref) => Some(enc_ref),
+                    None => *self.block_character_encoding.borrow()
+                };
+
+                // Step 3.
+                // TODO: Let character encoding be the script block's fallback
+                // character encoding.
+
+                let encoding_after_step3: Option<EncodingRef> = match encoding_after_step2 {
+                    Some(enc_ref) => Some(enc_ref),
+                    None => {
+                        let fallback_charset = (*self.parser_document).Charset();
+                        match encoding_from_whatwg_label(&fallback_charset) {
+                            Some(enc_ref) => Some(enc_ref),
+                            None => {
+                                debug!("error loading script, unknown encoding {} given as block's\
+                                    fallback charactr encoding (self.parser_document.Charset())", fallback_charset);
+                                None}
+                            }
+                        },
+                };
+
+                // Step 4.
+                // TODO: Otherwise, decode the file to Unicode, using character
+                // encoding as the fallback encoding.
+
+                let final_encoding = encoding_after_step3.unwrap_or(UTF_8 as EncodingRef);
+
+                (DOMString::from(final_encoding.decode(&*bytes, DecoderTrap::Replace).unwrap()),
+                    true,
+                    metadata.final_url)
             },
 
             // Step 2.b.1.c.
